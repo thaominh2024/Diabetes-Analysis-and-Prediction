@@ -1,0 +1,1351 @@
+---
+title: "Đồ án cuối kỳ - Phân tích và Phân loại Tình trạng Tiểu đường"
+subtitle: "Exploratory Data Analysis & Predictive Modeling"
+author: "Nhóm D"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+    theme: flatly
+    highlight: tango
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, 
+                      fig.width = 10, fig.height = 6, fig.align = "center")
+set.seed(2024)
+```
+
+```{r load-libraries, message=FALSE, warning=FALSE}
+# Load tất cả thư viện cần thiết
+library(tidyverse)      # Data manipulation
+library(janitor)        # Clean names
+library(skimr)          # Data summary
+library(MASS)           # LDA
+library(caret)          # Confusion matrix, train/test split
+library(pROC)           # ROC curves
+library(knitr)          # Tables
+library(GGally)         # Visualization
+library(corrplot)       # Correlation plots
+library(ggcorrplot)     # Correlation heatmap
+library(car)            # VIF
+library(RColorBrewer)   # Color palettes
+library(nnet)           # Multinomial logistic regression
+library(rcompanion)     # Cramer's V
+library(biotools)       # Box's M test
+library(smotefamily)    # SMOTE
+library(xgboost)        # XGBoost
+library(rstatix)        # Statistical tests
+library(reshape2)       # Data reshaping
+library(sjPlot)         # Visualization
+```
+
+# Giới thiệu
+
+Dataset nghiên cứu về bệnh tiểu đường với biến mục tiêu **Diabetes_012** (3 mức):
+
+- **0**: Không tiểu đường
+- **1**: Tiền tiểu đường (Prediabetes)
+- **2**: Tiểu đường (Diabetes)
+
+Đây là bài toán **phân loại đa lớp** (multiclass classification) trong lĩnh vực y sinh, với 21 biến giải thích liên quan đến yếu tố lâm sàng, hành vi sống, và nhân khẩu học.
+
+## Dataset: `diabetes_012`
+
+**Mô tả:**  
+`diabetes_012` là bộ dữ liệu khảo sát sức khỏe người trưởng thành từ BRFSS 2015, dùng để phân tích tình trạng tiểu đường và các yếu tố nguy cơ liên quan.
+
+**Đơn vị quan sát:**  
+Mỗi dòng tương ứng với một cá nhân tham gia khảo sát.
+
+# Mô tả dữ liệu
+
+## Đọc dữ liệu & kiểm tra tổng quan
+
+```{r read-data}
+# Đọc dữ liệu
+data <- read.csv("C:/Users/lenovo/Downloads/diabetes_012_health_indicators_BRFSS2015.csv", stringsAsFactors = FALSE)
+
+# Chuẩn hóa tên biến
+data <- data %>% clean_names()
+
+# Kích thước dữ liệu
+cat("Kích thước dữ liệu:\n")
+dim(data)
+
+# Xem cấu trúc
+cat("\nCấu trúc dữ liệu:\n")
+glimpse(data)
+```
+
+### Data Summary
+
+- **Tên bộ dữ liệu:** `diabetes_012`  
+- **Số dòng:** 253,680  
+- **Số cột:** 22  
+
+**Phân bố kiểu dữ liệu:**
+- Numeric: 22 biến  
+
+**Missing value:**
+- Không có
+
+```{r data-summary}
+# Thống kê tổng quan
+skim(data)
+```
+
+### Data Dictionary
+
+| Biến | Kiểu dữ liệu | Mô tả |
+|------|--------------|-------|
+| `Diabetes_012` | Integer | 0 = Không mắc, 1 = Tiền tiểu đường, 2 = Tiểu đường |
+| `HighBP` | Integer | Huyết áp cao (0 = Không, 1 = Có) |
+| `HighChol` | Integer | Cholesterol cao (0 = Không, 1 = Có) |
+| `CholCheck` | Integer | Kiểm tra cholesterol 5 năm gần nhất |
+| `BMI` | Numeric | Chỉ số khối cơ thể |
+| `Smoker` | Integer | Hút ≥100 điếu thuốc trong đời |
+| `Stroke` | Integer | Tiền sử đột quỵ (0/1) |
+| `HeartDiseaseorAttack` | Integer | Tiền sử bệnh tim (0/1) |
+| `PhysActivity` | Integer | Hoạt động thể chất 30 ngày qua |
+| `Fruits` | Integer | Ăn trái cây ≥1 lần/ngày |
+| `Veggies` | Integer | Ăn rau ≥1 lần/ngày |
+| `HvyAlcoholConsump` | Integer | Uống rượu bia nặng |
+| `AnyHealthcare` | Integer | Có tiếp cận dịch vụ y tế |
+| `NoDocbcCost` | Integer | Không đi khám do chi phí |
+| `GenHlth` | Integer | Sức khỏe tổng quát (1–5) |
+| `MentHlth` | Integer | Ngày sức khỏe tinh thần kém (0–30) |
+| `PhysHlth` | Integer | Ngày sức khỏe thể chất kém (0–30) |
+| `DiffWalk` | Integer | Gặp khó khăn khi đi bộ hoặc leo cầu thang (0/1) |
+| `Sex` | Integer | Giới tính (0=Nữ, 1=Nam) |
+| `Age` | Integer | Nhóm tuổi (1–13, tương ứng 18-80+) |
+| `Education` | Integer | Trình độ học vấn (1–6) |
+| `Income` | Integer | Nhóm thu nhập (1–8) |
+
+# Exploratory Data Analysis (EDA)
+
+## Thống kê mô tả
+
+### Insight từ tổng quan thống kê
+
+- `diabetes_012`: mean = 0.3 cho thấy đa số người không mắc tiểu đường, phân bố lệch về giá trị 0 → Tập dữ liệu mất cân bằng nhẹ, cần chú ý khi xây dựng mô hình phân loại.
+
+- `chol_check`, `any_healthcare`, `no_docbc_cost`: Gần như tất cả người tham gia đã kiểm tra cholesterol, có bảo hiểm hoặc tiếp cận dịch vụ y tế → Phương sai thấp, xem xét loại khỏi mô hình.
+
+- `bmi`: phân bố lệch phải, mean=28.38, có outlier lớn cần kiểm tra → Biến quan trọng cần được kiểm tra và chuẩn hóa.
+
+- `stroke`, `heart_diseaseor_attack`, `hvy_alcohol_consump`, `diff_walk`: phần lớn không đột quỵ, không có tiền sử bệnh tim → Biến hiếm có thể gây khó khăn cho mô hình.
+
+- `high_bp`, `high_chol`, `smoker`: là các biến có liên quan mạnh đến biến mục tiêu.
+
+- `gen_hlth`: mean=2.51, phân bố tập trung ở mức 2-3 → Biến ordinal quan trọng có khả năng liên quan mạnh đến biến mục tiêu.
+
+- `age`: mean = 8.03, tập trung ở nhóm trung niên - cao tuổi → Biến ordinal có giá trị dự báo.
+
+## Chia nhóm các biến
+
+- **Biến nhị phân:** `high_bp`, `high_chol`, `chol_check`, `smoker`, `stroke`, `heart_diseaseor_attack`, `phys_activity`, `fruits`, `veggies`, `hvy_alcohol_consump`, `any_healthcare`, `no_docbc_cost`, `diff_walk`, `sex`.
+
+- **Biến thứ tự:** `age`, `education`, `income`, `gen_hlth`
+
+- **Biến liên tục:** `bmi`, `ment_hlth`, `phys_hlth`
+
+```{r variable-groups}
+# Phân loại biến theo tính chất
+binary_vars <- c("high_bp", "high_chol", "chol_check", "smoker", "stroke", 
+                 "heart_diseaseor_attack", "phys_activity", "fruits", "veggies", 
+                 "hvy_alcohol_consump", "any_healthcare", "no_docbc_cost", 
+                 "diff_walk", "sex")
+
+ordinal_vars <- c("gen_hlth", "age", "education", "income")
+
+continuous_vars <- c("bmi", "ment_hlth", "phys_hlth")
+
+cat("Binary variables:", length(binary_vars), "\n")
+cat("Ordinal variables:", length(ordinal_vars), "\n")
+cat("Continuous variables:", length(continuous_vars), "\n")
+```
+
+## Phân bố các biến
+
+### Kiểm tra outliers
+
+```{r outlier-check}
+check_outlier_iqr_df <- function(x, name) {
+  Q1 <- quantile(x, 0.25)
+  Q3 <- quantile(x, 0.75)
+  IQR <- Q3 - Q1
+  lower <- Q1 - 1.5 * IQR
+  upper <- Q3 + 1.5 * IQR
+  
+  tibble(
+    variable = name,
+    lower_bound = round(lower, 2),
+    upper_bound = round(upper, 2),
+    n_outliers = sum(x < lower | x > upper),
+    outlier_rate = round(mean(x < lower | x > upper) * 100, 2)
+  )
+}
+
+outlier_summary <- bind_rows(
+  check_outlier_iqr_df(data$bmi, "bmi"),
+  check_outlier_iqr_df(data$ment_hlth, "ment_hlth"),
+  check_outlier_iqr_df(data$phys_hlth, "phys_hlth")
+)
+
+kable(outlier_summary, caption = "Kiểm tra Outliers cho các biến liên tục")
+```
+
+### Đề xuất xử lý outliers
+
+- `bmi`: winsorize tại phân vị 1%–99% và chuẩn hóa.
+- `ment_hlth` có outliers hợp lệ, nên bucket hóa (chia nhóm theo khoảng).
+- `phys_hlth` tương tự `ment_hlth`.
+
+## Kiểm định thống kê với biến mục tiêu
+
+### Chuyển đổi biến mục tiêu
+
+```{r target-conversion}
+# Chuyển Diabetes_012 thành factor
+data$diabetes_012 <- factor(
+  data$diabetes_012,
+  levels = c(0, 1, 2),
+  labels = c("Không mắc tiểu đường", "Tiền tiểu đường", "Tiểu đường")
+)
+
+# Kiểm tra phân phối
+cat("Phân phối biến mục tiêu:\n")
+table(data$diabetes_012)
+cat("\nTỷ lệ phần trăm:\n")
+round(prop.table(table(data$diabetes_012)) * 100, 2)
+```
+
+### Chi-square test - Biến nhị phân
+
+```{r chi-square-test}
+vars_binary <- c("high_bp", "high_chol", "smoker", "stroke", "diff_walk", "sex")
+
+chi_sq_results <- lapply(vars_binary, function(var) {
+  tab <- table(data[[var]], data$diabetes_012)
+  test <- chisq.test(tab)
+  
+  data.frame(
+    variable = var,
+    chi_square = test$statistic,
+    df = test$parameter,
+    p_value = test$p.value
+  )
+})
+
+chi_sq_results <- do.call(rbind, chi_sq_results)
+kable(chi_sq_results, 
+      caption = "Chi-square test - Biến nhị phân vs Diabetes_012",
+      digits = 4)
+```
+
+```{r cramers-v}
+cramers_v_result <- lapply(vars_binary, function(var) {
+  tbl <- table(data[[var]], data$diabetes_012)
+  v <- cramerV(tbl)
+  
+  data.frame(
+    variable = var,
+    cramers_v = as.numeric(v)
+  )
+}) %>% bind_rows()
+
+kable(cramers_v_result, 
+      caption = "Cramér's V - Effect Size",
+      digits = 4)
+```
+
+**Nhận xét:**
+
+Kết quả kiểm định Chi-square cho thấy tất cả các biến nhị phân đều có mối liên hệ có ý nghĩa thống kê với tình trạng tiểu đường (p < 0.001). Phân tích effect size bằng Cramér's V cho thấy các biến liên quan đến sức khỏe tim mạch và khả năng vận động (`high_bp`, `high_chol`, `diff_walk`) có mức độ liên hệ mạnh nhất.
+
+### Visualization - Biến nhị phân
+
+```{r viz-binary-highbp}
+ggplot(data, aes(x = diabetes_012, fill = factor(high_bp))) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_discrete(labels = c("Không tăng huyết áp", "Tăng huyết áp")) +
+  labs(title = "Tăng huyết áp theo tình trạng tiểu đường",
+       x = "Tình trạng tiểu đường", y = "Tỷ lệ (%)", fill = "Tăng huyết áp") +
+  theme_minimal()
+```
+
+**Nhận xét:**
+
+- Tỷ lệ người có high_bp tăng rõ rệt ở nhóm tiền tiểu đường và tiểu đường.
+
+```{r viz-binary-highchol}
+ggplot(data, aes(x = diabetes_012, fill = factor(high_chol))) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_discrete(labels = c("Không tăng cholesterol", "Tăng cholesterol")) +
+  labs(title = "Tăng cholesterol theo tình trạng tiểu đường",
+       x = "Tình trạng tiểu đường", y = "Tỷ lệ (%)", fill = "Tăng cholesterol") +
+  theme_minimal()
+```
+
+**Nhận xét:**
+
+- Người mắc/tiền mắc tiểu đường có tỷ lệ cholesterol cao hơn.
+
+```{r viz-binary-diffwalk}
+ggplot(data, aes(x = diabetes_012, fill = factor(diff_walk))) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_discrete(labels = c("Không khó khăn", "Khó khăn khi đi lại")) +
+  labs(title = "Khó khăn khi đi lại theo tình trạng tiểu đường",
+       x = "Tình trạng tiểu đường", y = "Tỷ lệ (%)", fill = "Khó khăn khi đi lại") +
+  theme_minimal()
+```
+
+**Nhận xét:**
+
+- Nhóm tiền/mắc tiểu đường có tỷ lệ gặp khó khăn khi đi lại cao hơn.
+- Các biểu đồ tỷ lệ cho thấy sự khác biệt rõ rệt về phân bố của `high_bp`, `high_chol` và `diff_walk` giữa các nhóm tình trạng tiểu đường. Tỷ lệ cá nhân có huyết áp cao, cholesterol cao và gặp khó khăn khi đi lại tăng dần từ nhóm không tiểu đường sang tiền tiểu đường và tiểu đường, củng cố kết quả kiểm định Chi-square và Cramér's V về vai trò dự báo quan trọng của các biến này.
+
+### Kruskal-Wallis test - Biến ordinal
+
+```{r kruskal-wallis-ordinal}
+ordinal_vars_test <- c("age", "education", "income", "gen_hlth")
+
+kw_result <- lapply(ordinal_vars_test, function(var) {
+  test <- kruskal.test(as.formula(paste(var, "~ diabetes_012")), data = data)
+  
+  data.frame(
+    variable = var,
+    chi_square = as.numeric(test$statistic),
+    df = test$parameter,
+    p_value = test$p.value
+  )
+}) %>% bind_rows()
+
+kable(kw_result, 
+      caption = "Kruskal-Wallis test - Biến ordinal vs Diabetes_012",
+      digits = 4)
+```
+
+```{r kw-effect-size}
+kw_effect <- data %>%
+  select(diabetes_012, all_of(ordinal_vars_test)) %>%
+  pivot_longer(-diabetes_012, names_to = "variable", values_to = "value") %>%
+  group_by(variable) %>%
+  kruskal_effsize(value ~ diabetes_012)
+
+kable(kw_effect, 
+      caption = "Effect size (Eta-squared) - Biến ordinal",
+      digits = 4)
+```
+
+**Nhận xét:**
+
+Tất cả các biến ordinal đều khác biệt có ý nghĩa thống kê giữa các nhóm tình trạng tiểu đường (p < 0.001). Xét về mức độ ảnh hưởng, `gen_hlth` có ảnh hưởng trung bình (η² ≈ 0.089) và nổi bật hơn, cho thấy tình trạng sức khỏe tổng quát có mối liên hệ rõ rệt với tình trạng tiểu đường.
+
+Trong khi đó, `age`, `education` và `income` có mức độ ảnh hưởng nhỏ (η² < 0.05), phản ánh vai trò phân biệt hạn chế hơn khi xét đơn lẻ, dù vẫn có ý nghĩa thống kê do kích thước mẫu lớn.
+
+### Visualization - Biến ordinal
+
+```{r viz-ordinal-age}
+ggplot(data, aes(x = diabetes_012, y = age, fill = diabetes_012)) +
+  geom_boxplot(outlier.alpha = 0.1) +
+  labs(title = "Phân bố độ tuổi theo tình trạng tiểu đường",
+       x = "Tình trạng tiểu đường", y = "Độ tuổi") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+**Nhận xét:**
+
+- Tiểu đường tập trung ở độ tuổi trung niên và cao tuổi tuy nhiên 1 vài người trẻ vẫn bị.
+
+```{r viz-ordinal-education}
+ggplot(data, aes(x = diabetes_012, y = education, fill = diabetes_012)) +
+  geom_boxplot(outlier.alpha = 0.1) +
+  labs(title = "Trình độ học vấn theo tình trạng tiểu đường",
+       x = "Tình trạng tiểu đường", y = "Trình độ học vấn") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+**Nhận xét:**
+
+- Không có sự khác biệt nào về trình độ học vấn giữa ba nhóm (không tiểu đường, tiền tiểu đường và tiểu đường).
+
+```{r viz-ordinal-income}
+ggplot(data, aes(x = diabetes_012, y = income, fill = diabetes_012)) +
+  geom_boxplot(outlier.alpha = 0.1) +
+  labs(title = "Mức thu nhập theo tình trạng tiểu đường",
+       x = "Tình trạng tiểu đường", y = "Mức thu nhập") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+**Nhận xét:**
+
+- Nhóm không bị tiểu đường (No diabetes) có mức thu nhập trung vị cao hơn đáng kể so với hai nhóm còn lại. Trong khi đó, nhóm tiền tiểu đường và tiểu đường có mức thu nhập thấp hơn và phân phối khá tương đồng nhau.
+
+```{r viz-ordinal-genhlth}
+ggplot(data, aes(x = diabetes_012, y = gen_hlth, fill = diabetes_012)) +
+  geom_boxplot(outlier.alpha = 0.1) +
+  labs(title = "Tình trạng sức khỏe chung theo tình trạng tiểu đường",
+       x = "Tình trạng tiểu đường", 
+       y = "Sức khỏe chung (1 = Rất tốt → 5 = Kém)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+**Nhận xét:** Có xu hướng rõ ràng: tình trạng bệnh càng nặng thì tự đánh giá về sức khỏe càng kém.
+
+### Kruskal-Wallis test - Biến liên tục
+
+```{r kruskal-wallis-continuous}
+vars_cont <- c("bmi", "ment_hlth", "phys_hlth")
+
+kw_results_cont <- lapply(vars_cont, function(v) {
+  test <- kruskal.test(as.formula(paste(v, "~ diabetes_012")), data = data)
+  data.frame(
+    variable = v,
+    chi_square = as.numeric(test$statistic),
+    df = test$parameter,
+    p_value = test$p.value
+  )
+})
+
+kw_results_cont <- do.call(rbind, kw_results_cont)
+kable(kw_results_cont, 
+      caption = "Kruskal-Wallis test - Biến liên tục vs Diabetes_012",
+      digits = 4)
+```
+
+**Nhận xét:**
+
+Kiểm định Kruskal–Wallis cho thấy cả ba biến liên tục `bmi`, `ment_hlth`, `phys_hlth` đều khác biệt có ý nghĩa thống kê giữa các nhóm tình trạng tiểu đường (`diabetes_012`), với p-value ≪ 0.001.
+
+- `bmi`: có sự khác biệt rất mạnh giữa các nhóm, cho thấy chỉ số BMI tăng rõ rệt theo mức độ tiểu đường → biến dự báo quan trọng.
+- `phys_hlth`: số ngày sức khỏe thể chất kém khác nhau đáng kể giữa các nhóm, phản ánh gánh nặng sức khỏe tăng ở nhóm tiền tiểu đường và tiểu đường.
+- `ment_hlth`: dù mức độ khác biệt nhỏ hơn hai biến còn lại, sự khác biệt vẫn có ý nghĩa thống kê, cho thấy yếu tố sức khỏe tinh thần cũng liên quan đến tình trạng tiểu đường.
+
+### Visualization - Biến liên tục
+
+```{r viz-continuous-bmi}
+ggplot(data, aes(x = diabetes_012, y = bmi)) +
+  geom_boxplot(outlier.alpha = 0.2) +
+  labs(title = "Chỉ số BMI theo tình trạng tiểu đường",
+       x = "Tình trạng tiểu đường", y = "Chỉ số khối cơ thể (BMI)") +
+  theme_minimal()
+```
+
+**Nhận xét:**
+
+- Nhóm Tiểu đường và Tiền tiểu đường có mức BMI trung vị cao hơn một chút so với nhóm không bệnh.
+- Cả 3 nhóm đều xuất hiện rất nhiều giá trị ngoại lai (outliers) ở mức BMI rất cao.
+
+```{r viz-continuous-menthlth}
+ggplot(data, aes(x = diabetes_012, y = ment_hlth)) +
+  geom_boxplot(outlier.alpha = 0.2) +
+  labs(title = "Số ngày sức khỏe tinh thần kém theo tình trạng tiểu đường",
+       x = "Tình trạng tiểu đường", 
+       y = "Số ngày sức khỏe tinh thần kém (0–30 ngày)") +
+  theme_minimal()
+```
+
+**Nhận xét:**
+
+- Dữ liệu bị lệch rất mạnh (Zero-inflated): Trung vị của cả 3 nhóm đều bằng 0, tức là đa số mọi người đều cảm thấy tinh thần bình thường (0 ngày kém).
+- Tuy nhiên, nhóm Tiền tiểu đường có độ biến thiên (chiều cao hộp) lớn hơn, cho thấy một bộ phận trong nhóm này gặp nhiều vấn đề tâm lý hơn so với nhóm khỏe mạnh.
+
+```{r viz-continuous-physhlth}
+ggplot(data, aes(x = diabetes_012, y = phys_hlth)) +
+  geom_boxplot(outlier.alpha = 0.2) +
+  labs(title = "Số ngày sức khỏe thể chất kém theo tình trạng tiểu đường",
+       x = "Tình trạng tiểu đường", 
+       y = "Số ngày sức khỏe thể chất kém (0–30 ngày)") +
+  theme_minimal()
+```
+
+**Nhận xét:**
+
+- Nhóm Tiểu đường có phân phối trải rộng hơn hẳn (hộp rất dài, kéo đến 15 ngày), chứng tỏ người bệnh tiểu đường chịu ảnh hưởng nặng nề về thể chất hàng ngày hơn rất nhiều so với hai nhóm còn lại.
+
+# Phân tích tương quan và đa cộng tuyến
+
+## Correlation Analysis
+
+```{r correlation-matrix}
+# Tạo ma trận tương quan
+cor_matrix <- cor(data %>% select(-diabetes_012))
+
+# Vẽ heatmap
+ggcorrplot(cor_matrix, 
+           hc.order = TRUE, 
+           type = "lower", 
+           outline.col = "white",
+           ggtheme = ggplot2::theme_minimal(),
+           colors = c("#E4672E", "white", "#3F09E0"), 
+           lab = TRUE, 
+           title = "Ma trận tương quan các biến",
+           lab_size = 2) + 
+  labs(x = NULL, y = NULL) +
+  theme(
+    axis.text.y = element_text(size = 10, vjust = 0.5),
+    axis.text.x = element_text(size = 10),
+    plot.title = element_text(color = "red", size = 14, face = "bold", hjust = 0.5),
+    panel.grid = element_blank()
+  ) +
+  coord_fixed(ratio = 0.6) +
+  scale_y_discrete(expand = expansion(add = 0.8))
+```
+
+## Nhận xét về mối tương quan
+
+### Các nhân tố dự báo mạnh nhất:
+
+* **Sức khỏe tổng quát (gen_hlth)** có tương quan thuận mạnh nhất (0.30). Theo danh mục tra cứu (column 90): điểm đánh giá được xếp từ 1-5 (theo thứ tự từ khỏe → yếu, 7 là không biết và 9 là từ chối trả lời). Điều này có nghĩa là khi điểm tự đánh giá sức khỏe càng cao (sức khỏe tệ), nguy cơ mắc tiểu đường càng cao.
+
+* **Chỉ số thể trạng (bmi)** với hệ số tương quan 0.22 cho thấy đây là tiền đề thể chất dẫn đến tiểu đường. Vì: Lượng mỡ thừa giải phóng các acid béo tự do và các chất gây viêm (cytokine như TNF-alpha) làm giảm độ nhạy của các thụ thể insulin trên tế bào, dẫn đến tình trạng kháng insulin. Khi tế bào không hấp thụ được đường, tuyến tụy phải làm việc quá tải và suy yếu, gây ra tiểu đường Type 2. Theo Tổ chức Y tế Thế giới (WHO) và Hiệp hội Đái tháo đường Hoa Kỳ (ADA), người có chỉ số BMI > 30 có nguy cơ mắc tiểu đường cao gấp 20 đến 40 lần so với người có cân nặng bình thường.
+
+* **Huyết áp cao (high_bp)**, **Cholesterol cao (high_chol)**, **bệnh tim hoặc nhồi máu cơ tim (heart_diseaseor_attack)** là các yếu tố lâm sàng quan trọng tiếp theo (0.27, 0.21 và 0.18). Điều này hoàn toàn đúng với y học: béo phì và cao huyết áp là các tiền đề trực tiếp của tiểu đường.
+  + Tiểu đường: Cao huyết áp gây áp lực lớn lên thành mạch, làm tổn thương lớp nội mạc. Tình trạng này kết hợp với lượng đường huyết cao sẽ đẩy nhanh quá trình xơ vữa động mạch và làm trầm trọng thêm tình trạng kháng insulin. Nghiên cứu từ American Journal of Hypertension cho thấy khoảng 50-80% bệnh nhân tiểu đường Type 2 cũng bị cao huyết áp đồng thời.
+  + Cholesterol cao: Tương quan thuận đáng kể vì rối loạn lipid máu thường đi kèm với rối loạn chuyển hóa đường.
+  + Bệnh tim và Nhồi máu cơ tim: Khi hệ thống mạch máu bị tổn thương bởi Huyết áp cao và Cholesterol cao, lưu lượng máu đến cơ tim bị cản trở, dẫn đến các cơn nhồi máu cơ tim. Theo CDC, người mắc tiểu đường có nguy cơ tử vong vì bệnh tim cao gấp 2 lần người bình thường.
+
+* **Các biến số về sự suy giảm vận động (diff_walk, phys_hlth)**: Tương quan thuận (0.22 và 0.18) cho thấy tiểu đường thường đi kèm với các biến chứng về thần kinh ngoại biên hoặc xương khớp, làm hạn chế khả năng di chuyển và tăng số ngày có sức khỏe kém trong tháng.
+
+* **Tuổi tác (age)**: Tương quan thuận (0.19) phản ánh quy luật sinh học khi tuổi thọ tăng, hiệu suất chuyển hóa của tuyến tụy giảm dần và các tổn thương tế bào tích lũy dẫn đến nguy cơ bùng phát bệnh cao hơn ở người trung niên và người già.
+
+### Nhân tố bảo vệ (Tương quan nghịch):
+
+* **Thu nhập (income)** và **Học vấn (education)** có tương quan nghịch mạnh nhất với tiểu đường (-0.17 và -0.13) cho thấy những người có thu nhập và học vấn cao hơn thường có lối sống lành mạnh hơn, tiếp cận thực phẩm dinh dưỡng, kiến thức phòng bệnh cũng như hệ thống y tế tốt hơn, dẫn đến tỉ lệ mắc bệnh thấp hơn.
+
+* **Hoạt động thể chất (phys_activity)** cũng cho thấy tác động giảm thiểu nguy cơ rõ rệt với hệ số tương quan -0.12; khẳng định việc vận động giúp cơ bắp tiêu thụ glucose hiệu quả hơn, làm giảm nồng độ đường trong máu một cách tự nhiên.
+
+## Multicollinearity (VIF)
+
+```{r vif-analysis}
+# Tạo mô hình tuyến tính tạm để tính VIF
+data_numeric <- data
+data_numeric$diabetes_012_num <- as.numeric(data$diabetes_012)
+
+model_vif <- lm(diabetes_012_num ~ . - diabetes_012, data = data_numeric)
+
+vif_results <- vif(model_vif)
+
+vif_df <- data.frame(
+  Variable = names(vif_results),
+  VIF = as.numeric(vif_results)
+)
+
+vif_df <- vif_df[order(-vif_df$VIF), ]
+
+kable(head(vif_df, 15), 
+      caption = "Top 15 biến có VIF cao nhất",
+      row.names = FALSE,
+      digits = 3)
+```
+
+```{r vif-plot}
+ggplot(vif_df, aes(x = reorder(Variable, VIF), y = VIF)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_hline(yintercept = 5, linetype = "dashed", color = "red") + 
+  coord_flip() +
+  labs(title = "Biểu đồ chỉ số VIF các biến", 
+       x = "Biến số", y = "Chỉ số VIF") +
+  theme_minimal()
+```
+
+**Nhận xét:**
+
+Tất cả các biến đều có VIF < 2, cho thấy không tồn tại đa cộng tuyến nghiêm trọng. Mô hình đảm bảo tính ổn định của các hệ số hồi quy và cho phép tin tưởng vào kết luận về tác động riêng biệt của từng nhân tố.
+
+## Kết luận EDA
+
+Mối quan hệ đa biến rõ ràng, không bị nhiễu bởi đa cộng tuyến nghiêm trọng. Tiểu đường trong tập dữ liệu này bị chi phối bởi 3 nhóm chính:
+
+1. **Thể trạng lâm sàng** (bmi, high_bp)
+2. **Cảm quan sức khỏe** (gen_hlth)
+3. **Điều kiện kinh tế xã hội** (income, education)
+
+# Tiền xử lý dữ liệu (Data Preprocessing)
+
+## Kiểm tra Missing Values
+
+```{r check-missing-values}
+missing_counts <- colSums(is.na(data))
+missing_pct <- round(100 * missing_counts / nrow(data), 2)
+
+missing_summary <- data.frame(
+  Variable = names(missing_counts),
+  Missing_Count = missing_counts,
+  Missing_Pct = missing_pct
+)
+
+kable(missing_summary[missing_summary$Missing_Count > 0, ], 
+      caption = "Missing Values Summary",
+      row.names = FALSE)
+```
+
+**Kết quả:** Không có missing values trong dataset.
+
+## Chuẩn bị dữ liệu cho mô hình
+
+```{r prepare-data}
+# Tạo bản sao để xử lý
+data_scaled <- data
+
+# Chuẩn hóa các biến continuous bằng z-score
+for (var in continuous_vars) {
+  data_scaled[[var]] <- scale(data_scaled[[var]])[, 1]
+}
+
+# Kiểm tra kết quả chuẩn hóa
+cat("Mean and SD after scaling:\n")
+sapply(data_scaled[, continuous_vars], function(x) c(mean = mean(x), sd = sd(x)))
+```
+
+**Lý do chuẩn hóa:** LDA tính toán ma trận covariance chung. Nếu các biến có scale khác nhau nhiều, biến có phương sai lớn hơn sẽ chi phối discriminant function.
+
+## Loại bỏ biến có phương sai thấp
+
+```{r remove-low-variance}
+# Loại các biến có phương sai thấp
+data_final <- data_scaled %>%
+  select(-c(chol_check, any_healthcare, no_docbc_cost))
+
+cat("✓ Data ready for modeling\n")
+cat("Number of observations:", nrow(data_final), "\n")
+cat("Number of features:", ncol(data_final) - 1, "(excluding target)\n")
+```
+
+# Phương pháp mô hình hóa
+
+## Multinomial Logistic Regression
+
+### Tại sao chọn Multinomial Logistic Regression?
+
+**Multinomial Logistic Regression (MLR)** là mô hình phân loại tuyến tính mở rộng cho bài toán đa lớp. MLR được chọn làm **baseline model** vì:
+
+1. **Phù hợp với biến mục tiêu nominal đa lớp** - sử dụng softmax function
+2. **Dễ diễn giải** - hệ số hồi quy cho phép diễn giải log-odds ratio
+3. **Baseline để so sánh** với các mô hình phức tạp hơn
+4. **Robust** với dữ liệu có nhiều biến nhị phân và ordinal
+
+### Kiểm tra giả định MLR
+
+```{r mlr-assumptions}
+cat("=== KIỂM TRA GIẢ ĐỊNH MULTINOMIAL LOGISTIC REGRESSION ===\n\n")
+
+# Giả định 1: Biến phụ thuộc là nominal (categorical) với > 2 lớp
+cat("✓ Giả định 1: Biến phụ thuộc Diabetes_012 là nominal với 3 lớp\n")
+cat("  Levels:", paste(levels(data_final$diabetes_012), collapse = ", "), "\n\n")
+
+# Giả định 2: Các quan sát độc lập (independent observations)
+cat("✓ Giả định 2: Dữ liệu từ BRFSS survey, mỗi người được khảo sát 1 lần\n")
+cat("  → Quan sát độc lập\n\n")
+
+# Giả định 3: Không có đa cộng tuyến nghiêm trọng (no severe multicollinearity)
+cat("✓ Giả định 3: Không có đa cộng tuyến nghiêm trọng\n")
+cat("  Tất cả VIF < 2 (đã kiểm tra ở phần VIF Analysis)\n")
+cat("  → Ma trận Hessian có thể được tính toán ổn định\n\n")
+
+# Giả định 4: Kích thước mẫu đủ lớn
+n_obs <- nrow(data_final)
+n_predictors <- ncol(data_final) - 1
+min_required <- 10 * n_predictors  # Rule of thumb: ≥ 10-15 obs per predictor
+
+cat("✓ Giả định 4: Kích thước mẫu đủ lớn\n")
+cat("  Số quan sát:", n_obs, "\n")
+cat("  Số predictors:", n_predictors, "\n")
+cat("  Yêu cầu tối thiểu (10× rule):", min_required, "\n")
+cat("  → Kích thước mẫu vượt xa yêu cầu\n\n")
+
+cat("=== TÓM TẮT KIỂM TRA GIẢ ĐỊNH ===\n")
+cat("✓ Biến phụ thuộc nominal (3 lớp): Thỏa mãn\n")
+cat("✓ Quan sát độc lập: Thỏa mãn\n")
+cat("✓ Không có đa cộng tuyến nghiêm trọng: Thỏa mãn (VIF < 2)\n")
+cat("✓ Kích thước mẫu đủ lớn: Thỏa mãn\n\n")
+
+cat("→ KẾT LUẬN: Multinomial Logistic Regression có thể áp dụng\n")
+cat("   Lưu ý: Class imbalance sẽ được xử lý bằng hybrid approach\n")
+```
+
+### Feature Selection
+
+```{r mlr-feature-selection}
+# Tạo biến numeric để tính correlation
+data_for_corr <- data_final
+data_for_corr$diabetes_numeric <- as.numeric(data_for_corr$diabetes_012) - 1
+
+# Tính correlation
+correlations <- sapply(names(data_for_corr)[!names(data_for_corr) %in% 
+                       c("diabetes_012", "diabetes_numeric")], function(var) {
+  cor(data_for_corr[[var]], data_for_corr$diabetes_numeric, use = "complete.obs")
+})
+
+cor_df <- data.frame(
+  Variable = names(correlations),
+  Correlation = correlations
+) %>% arrange(desc(abs(Correlation)))
+
+# Chọn top 10 features
+important_features <- cor_df$Variable[1:10]
+cat("✓ Chọn 10 features:", paste(important_features, collapse = ", "), "\n")
+
+# Dataset với features đã chọn
+data_selected <- data_final %>%
+  select(diabetes_012, all_of(important_features))
+```
+
+### Train/Test Split
+
+```{r mlr-train-test}
+set.seed(2024)
+
+train_index_mlr <- createDataPartition(
+  data_selected$diabetes_012, 
+  p = 0.7, 
+  list = FALSE
+)
+
+train_data_mlr <- data_selected[train_index_mlr, ]
+test_data_mlr <- data_selected[-train_index_mlr, ]
+
+cat("Train:", nrow(train_data_mlr), "samples\n")
+cat("Test:", nrow(test_data_mlr), "samples\n")
+```
+
+### Hybrid Model (Undersampling + SMOTE + Class Weights)
+
+```{r mlr-hybrid}
+# Undersampling
+class_0_mlr <- train_data_mlr[train_data_mlr$diabetes_012 == "Không mắc tiểu đường", ]
+class_1_mlr <- train_data_mlr[train_data_mlr$diabetes_012 == "Tiền tiểu đường", ]
+class_2_mlr <- train_data_mlr[train_data_mlr$diabetes_012 == "Tiểu đường", ]
+
+target_majority <- round(nrow(class_2_mlr) * 3)
+class_0_reduced <- class_0_mlr[sample(nrow(class_0_mlr), 
+                                      min(target_majority, nrow(class_0_mlr))), ]
+
+train_before_smote_mlr <- rbind(class_0_reduced, class_1_mlr, class_2_mlr)
+
+# SMOTE
+train_before_smote_mlr$diabetes_012_num <- as.numeric(train_before_smote_mlr$diabetes_012) - 1
+X_hybrid_mlr <- train_before_smote_mlr[, -which(names(train_before_smote_mlr) %in% 
+                                          c("diabetes_012", "diabetes_012_num"))]
+y_hybrid_mlr <- train_before_smote_mlr$diabetes_012_num
+
+smote_hybrid_mlr <- SMOTE(X = X_hybrid_mlr, target = y_hybrid_mlr, K = 5, dup_size = 0)
+
+train_hybrid_mlr <- smote_hybrid_mlr$data
+colnames(train_hybrid_mlr)[ncol(train_hybrid_mlr)] <- "diabetes_012"
+
+train_hybrid_mlr$diabetes_012 <- factor(
+  train_hybrid_mlr$diabetes_012,
+  levels = c(0, 1, 2),
+  labels = c("Không mắc tiểu đường", "Tiền tiểu đường", "Tiểu đường")
+)
+
+# Class weights
+class_weights_hybrid_mlr <- c("Không mắc tiểu đường" = 1, 
+                              "Tiền tiểu đường" = 0.8, 
+                              "Tiểu đường" = 3.8)
+model_weights_mlr <- class_weights_hybrid_mlr[as.character(train_hybrid_mlr$diabetes_012)]
+
+# Train model
+logit_hybrid_mlr <- multinom(
+  diabetes_012 ~ ., 
+  data = train_hybrid_mlr,
+  weights = model_weights_mlr,
+  trace = FALSE,
+  maxit = 200
+)
+
+# Predict
+pred_hybrid_mlr <- predict(logit_hybrid_mlr, newdata = test_data_mlr, type = "class")
+conf_hybrid_mlr <- confusionMatrix(pred_hybrid_mlr, test_data_mlr$diabetes_012)
+
+cat("\n=== HYBRID MODEL RESULTS ===\n")
+print(conf_hybrid_mlr$table)
+cat("\nSensitivity:\n")
+print(round(conf_hybrid_mlr$byClass[, "Sensitivity"], 4))
+```
+
+### ROC Curves - MLR
+
+```{r mlr-roc}
+# Probabilities
+prob_hybrid_mlr <- predict(logit_hybrid_mlr, newdata = test_data_mlr, type = "probs")
+
+# Binary labels
+test_binary_0_mlr <- ifelse(test_data_mlr$diabetes_012 == "Không mắc tiểu đường", 1, 0)
+test_binary_1_mlr <- ifelse(test_data_mlr$diabetes_012 == "Tiền tiểu đường", 1, 0)
+test_binary_2_mlr <- ifelse(test_data_mlr$diabetes_012 == "Tiểu đường", 1, 0)
+
+# ROC curves
+roc_0_mlr <- roc(test_binary_0_mlr, prob_hybrid_mlr[, 1], quiet = TRUE)
+roc_1_mlr <- roc(test_binary_1_mlr, prob_hybrid_mlr[, 2], quiet = TRUE)
+roc_2_mlr <- roc(test_binary_2_mlr, prob_hybrid_mlr[, 3], quiet = TRUE)
+
+# Plot
+plot(roc_0_mlr, col = "blue", lwd = 2, 
+     main = "ROC Curves - Multinomial Logistic Regression (Hybrid)")
+plot(roc_1_mlr, col = "orange", lwd = 2, add = TRUE)
+plot(roc_2_mlr, col = "red", lwd = 2, add = TRUE)
+abline(a = 0, b = 1, lty = 2, col = "gray")
+
+legend("bottomright",
+       legend = c(
+         paste0("No Diabetes (AUC = ", round(auc(roc_0_mlr), 3), ")"),
+         paste0("Prediabetes (AUC = ", round(auc(roc_1_mlr), 3), ")"),
+         paste0("Diabetes (AUC = ", round(auc(roc_2_mlr), 3), ")")
+       ),
+       col = c("blue", "orange", "red"),
+       lwd = 2)
+```
+
+## Linear Discriminant Analysis (LDA)
+
+### Tại sao chọn LDA?
+
+**Linear Discriminant Analysis** là một kỹ thuật phân loại thống kê cổ điển, đặc biệt phù hợp cho bài toán phân loại đa lớp trong lĩnh vực y sinh vì:
+
+1. **Generative Model** với nền tảng xác suất vững chắc
+2. **Phù hợp cho phân loại đa lớp** (K > 2)
+3. **Giảm chiều dữ liệu** (Dimensionality Reduction)
+4. **Baseline model dễ diễn giải** trong y sinh
+
+### Kiểm tra giả định LDA
+
+```{r lda-assumptions}
+cat("=== KIỂM TRA GIẢ ĐỊNH LINEAR DISCRIMINANT ANALYSIS ===\n\n")
+
+# Giả định 1: Phân phối Gaussian đa biến (Multivariate Normality)
+cat("Giả định 1: Phân phối Gaussian đa biến trong mỗi lớp\n")
+cat("  Kiểm tra trực quan (đã thực hiện ở phần EDA):\n")
+cat("  - BMI: Phân phối lệch phải nhẹ, có đỉnh rõ ràng\n")
+cat("  - Age: Biến ordinal rời rạc, xấp xỉ liên tục do mẫu lớn\n")
+cat("  - GenHlth: Biến ordinal (1-5), không hoàn toàn Gaussian\n")
+cat("  ⚠ Giả định NORMALITY bị vi phạm nhẹ, nhưng chấp nhận được\n")
+cat("    với dữ liệu y sinh có nhiều biến nhị phân và ordinal\n\n")
+
+# Giả định 2: Ma trận hiệp phương sai đồng nhất (Homogeneity of Covariance)
+cat("Giả định 2: Ma trận hiệp phương sai đồng nhất giữa các lớp\n")
+cat("  Kiểm định: Box's M-test\n")
+
+X <- data_final[, !(names(data_final) %in% "diabetes_012")]
+Y <- data_final$diabetes_012
+box_m <- boxM(X, Y)
+
+cat("  Chi-square statistic:", round(box_m$statistic, 2), "\n")
+cat("  p-value: < 2.2e-16\n")
+cat("  ⚠ Giả định HOMOGENEITY OF COVARIANCE bị vi phạm (p < 0.001)\n")
+cat("\n  Giải thích:\n")
+cat("  - Box's M-test rất nhạy với kích thước mẫu lớn\n")
+cat("  - Vi phạm này là phổ biến trong dữ liệu y sinh thực tế\n")
+cat("  - Dẫn đến: LDA kém robust, có thể bias về lớp đa số\n")
+cat("  - Giải pháp: Dùng balanced prior và so sánh với QDA/XGBoost\n\n")
+
+# Giả định 3: Không có đa cộng tuyến nghiêm trọng
+cat("✓ Giả định 3: Không có đa cộng tuyến nghiêm trọng\n")
+cat("  Tất cả VIF < 2 (đã kiểm tra ở phần VIF Analysis)\n")
+cat("  → Ma trận covariance có thể được ước lượng ổn định\n\n")
+
+# Giả định 4: Quan sát độc lập
+cat("✓ Giả định 4: Các quan sát độc lập\n")
+cat("  Dữ liệu từ BRFSS cross-sectional survey\n")
+cat("  → Không có cấu trúc phụ thuộc (clustered/longitudinal)\n\n")
+
+cat("=== TÓM TẮT KIỂM TRA GIẢ ĐỊNH ===\n")
+cat("⚠ Giả định 1 (Multivariate Normality): Vi phạm nhẹ, chấp nhận được\n")
+cat("⚠ Giả định 2 (Homogeneity of Covariance): Vi phạm nghiêm trọng\n")
+cat("✓ Giả định 3 (No Multicollinearity): Thỏa mãn (VIF < 2)\n")
+cat("✓ Giả định 4 (Independence): Thỏa mãn\n\n")
+
+cat("→ KẾT LUẬN:\n")
+cat("  LDA vi phạm giả định quan trọng về covariance matrix\n")
+cat("  → Sử dụng LDA như BASELINE MODEL để so sánh\n")
+cat("  → Kỳ vọng XGBoost (phi tham số) sẽ vượt trội hơn\n")
+```
+
+### Train/Test Split
+
+```{r lda-train-test-split}
+set.seed(2024)
+
+train_index <- createDataPartition(
+  data_final$diabetes_012, 
+  p = 0.7, 
+  list = FALSE,
+  times = 1
+)
+
+train_data <- data_final[train_index, ]
+test_data <- data_final[-train_index, ]
+
+cat("Train distribution:\n")
+print(table(train_data$diabetes_012))
+cat("\nTest distribution:\n")
+print(table(test_data$diabetes_012))
+```
+
+### LDA Model với Balanced Prior
+
+```{r lda-balanced-prior}
+# LDA với balanced prior
+lda_model_balanced <- lda(
+  diabetes_012 ~ ., 
+  data = train_data,
+  prior = c(1/3, 1/3, 1/3)
+)
+
+# Predict
+lda_pred_balanced <- predict(lda_model_balanced, newdata = test_data)
+
+# Confusion matrix
+conf_matrix_balanced <- confusionMatrix(
+  data = lda_pred_balanced$class,
+  reference = test_data$diabetes_012
+)
+
+cat("=== LDA WITH BALANCED PRIOR ===\n")
+print(conf_matrix_balanced$table)
+cat("\nSensitivity:\n")
+print(round(conf_matrix_balanced$byClass[, "Sensitivity"], 4))
+```
+
+### ROC Curves - LDA
+
+```{r lda-roc}
+# Binary labels
+test_binary_0 <- ifelse(test_data$diabetes_012 == "Không mắc tiểu đường", 1, 0)
+test_binary_1 <- ifelse(test_data$diabetes_012 == "Tiền tiểu đường", 1, 0)
+test_binary_2 <- ifelse(test_data$diabetes_012 == "Tiểu đường", 1, 0)
+
+prob_0 <- lda_pred_balanced$posterior[, "Không mắc tiểu đường"]
+prob_1 <- lda_pred_balanced$posterior[, "Tiền tiểu đường"]
+prob_2 <- lda_pred_balanced$posterior[, "Tiểu đường"]
+
+# ROC curves
+roc_0 <- roc(test_binary_0, prob_0, quiet = TRUE)
+roc_1 <- roc(test_binary_1, prob_1, quiet = TRUE)
+roc_2 <- roc(test_binary_2, prob_2, quiet = TRUE)
+
+# Plot
+plot(roc_0, col = "blue", lwd = 2, main = "ROC Curves - LDA (One-vs-Rest)")
+plot(roc_1, col = "orange", lwd = 2, add = TRUE)
+plot(roc_2, col = "red", lwd = 2, add = TRUE)
+abline(a = 0, b = 1, lty = 2, col = "gray")
+legend("bottomright", 
+       legend = c(
+         paste0("No Diabetes (AUC = ", round(auc(roc_0), 3), ")"),
+         paste0("Prediabetes (AUC = ", round(auc(roc_1), 3), ")"),
+         paste0("Diabetes (AUC = ", round(auc(roc_2), 3), ")")
+       ),
+       col = c("blue", "orange", "red"),
+       lwd = 2)
+```
+
+### Visualize Discriminant Functions
+
+```{r lda-visualization}
+# Chiếu dữ liệu lên không gian LD1-LD2
+lda_values <- predict(lda_model_balanced, newdata = test_data)
+
+lda_plot_data <- data.frame(
+  LD1 = lda_values$x[, 1],
+  LD2 = lda_values$x[, 2],
+  Actual = test_data$diabetes_012,
+  Predicted = lda_values$class
+)
+
+ggplot(lda_plot_data, aes(x = LD1, y = LD2, color = Actual, shape = Predicted)) +
+  geom_point(alpha = 0.6, size = 2) +
+  labs(title = "LDA: Projection onto Discriminant Functions",
+       x = "LD1 (First Discriminant Function)",
+       y = "LD2 (Second Discriminant Function)",
+       color = "Actual Class", shape = "Predicted Class") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+## XGBoost - Phương pháp học máy phi tham số
+
+### Tại sao chọn XGBoost sau LDA?
+
+Như đã phân tích, các giả định quan trọng của LDA (đặc biệt **homogeneity of covariance**) bị vi phạm nghiêm trọng. **XGBoost** được chọn vì:
+
+#### Ưu điểm về Giả định:
+
+1. **Không yêu cầu giả định phân phối**  
+   - LDA/MLR giả định Gaussian/linearity → dễ vi phạm  
+   - XGBoost là **phi tham số** → không cần giả định về phân phối  
+
+2. **Không yêu cầu homogeneity of covariance**  
+   - LDA yêu cầu các lớp có cùng ma trận covariance  
+   - XGBoost học cấu trúc riêng cho từng lớp qua tree splitting  
+
+3. **Học được ranh giới phi tuyến (non-linear decision boundaries)**  
+   - LDA/MLR chỉ tạo ranh giới tuyến tính  
+   - XGBoost kết hợp nhiều cây quyết định → ranh giới phức tạp  
+
+#### Ưu điểm về Class Imbalance:
+
+4. **Xử lý class imbalance tốt hơn qua sample weights**  
+   - MLR/LDA bias về lớp đa số dù dùng prior/weights  
+   - XGBoost điều chỉnh weights tại mỗi boosting iteration  
+
+5. **Robust với dữ liệu thực tế**  
+   - Tự động xử lý missing values (không có trong dataset này)  
+   - Không nhạy cảm với outliers như parametric models  
+
+#### Ưu điểm về Diễn giải:
+
+6. **Feature importance** dễ diễn giải  
+   - Gain-based importance: biến nào giảm loss nhiều nhất  
+   - Phù hợp với mục tiêu y sinh: tìm yếu tố nguy cơ quan trọng
+
+### Chuẩn bị dữ liệu
+
+```{r xgb-data-prep}
+# Chuyển đổi labels
+train_labels <- as.numeric(train_data$diabetes_012) - 1
+test_labels <- as.numeric(test_data$diabetes_012) - 1
+
+# Feature matrix
+train_features <- as.matrix(train_data[, -which(names(train_data) == "diabetes_012")])
+test_features <- as.matrix(test_data[, -which(names(test_data) == "diabetes_012")])
+
+# Class weights
+class_counts <- table(train_labels)
+total_samples <- length(train_labels)
+n_classes <- length(class_counts)
+
+class_weights <- total_samples / (n_classes * class_counts)
+sample_weights <- sapply(train_labels, function(label) {
+  class_weights[as.character(label)]
+})
+
+# Tăng weight cho Prediabetes và Diabetes
+sample_weights[train_labels == 1] <- sample_weights[train_labels == 1] * 1.5
+sample_weights[train_labels == 2] <- sample_weights[train_labels == 2] * 1.4
+
+# DMatrix
+dtrain <- xgb.DMatrix(data = train_features, label = train_labels, 
+                      weight = sample_weights)
+dtest <- xgb.DMatrix(data = test_features, label = test_labels)
+```
+
+### Training XGBoost
+
+```{r xgb-training}
+# Parameters
+params <- list(
+  objective = "multi:softprob",
+  num_class = 3,
+  eval_metric = "mlogloss",
+  eta = 0.05,
+  max_depth = 4,
+  subsample = 0.7,
+  colsample_bytree = 0.7,
+  min_child_weight = 0.5,
+  gamma = 0.1,
+  alpha = 0.1,
+  lambda = 1
+)
+
+# Cross-validation
+set.seed(2024)
+xgb_cv <- xgb.cv(
+  params = params,
+  data = dtrain,
+  nrounds = 300,
+  nfold = 5,
+  early_stopping_rounds = 30,
+  verbose = 0,
+  stratified = TRUE
+)
+
+best_nrounds <- xgb_cv$best_iteration
+if (is.null(best_nrounds) || length(best_nrounds) == 0) {
+  best_nrounds <- nrow(xgb_cv$evaluation_log)
+}
+
+cat("Optimal number of rounds:", best_nrounds, "\n")
+
+# Train final model
+set.seed(2024)
+xgb_model <- xgb.train(
+  params = params,
+  data = dtrain,
+  nrounds = best_nrounds,
+  verbose = 0
+)
+```
+
+### Prediction và Evaluation
+
+```{r xgb-prediction}
+# Predict
+xgb_probs_original <- predict(xgb_model, dtest, reshape = TRUE)
+xgb_predictions <- apply(xgb_probs_original, 1, which.max) - 1
+
+# Convert to factor
+test_labels_factor <- factor(test_labels, levels = c(0, 1, 2),
+                              labels = c("Không mắc tiểu đường", 
+                                       "Tiền tiểu đường", "Tiểu đường"))
+xgb_pred_factor <- factor(xgb_predictions, levels = c(0, 1, 2),
+                          labels = c("Không mắc tiểu đường", 
+                                   "Tiền tiểu đường", "Tiểu đường"))
+
+# Confusion matrix
+xgb_conf_matrix <- confusionMatrix(xgb_pred_factor, test_labels_factor)
+
+cat("=== XGBOOST RESULTS ===\n")
+print(xgb_conf_matrix$table)
+cat("\nSensitivity:\n")
+print(round(xgb_conf_matrix$byClass[, "Sensitivity"], 4))
+```
+
+### ROC Curves - XGBoost
+
+```{r xgb-roc}
+# Binary labels
+test_binary_0_xgb <- ifelse(test_labels == 0, 1, 0)
+test_binary_1_xgb <- ifelse(test_labels == 1, 1, 0)
+test_binary_2_xgb <- ifelse(test_labels == 2, 1, 0)
+
+# ROC curves
+roc_0_xgb <- roc(test_binary_0_xgb, xgb_probs_original[, 1], quiet = TRUE)
+roc_1_xgb <- roc(test_binary_1_xgb, xgb_probs_original[, 2], quiet = TRUE)
+roc_2_xgb <- roc(test_binary_2_xgb, xgb_probs_original[, 3], quiet = TRUE)
+
+# Plot
+plot(roc_0_xgb, col = "blue", lwd = 2, 
+     main = "ROC Curves - XGBoost (One-vs-Rest)")
+plot(roc_1_xgb, col = "orange", lwd = 2, add = TRUE)
+plot(roc_2_xgb, col = "red", lwd = 2, add = TRUE)
+abline(a = 0, b = 1, lty = 2, col = "gray")
+legend("bottomright", 
+       legend = c(
+         paste0("No Diabetes (AUC = ", round(auc(roc_0_xgb), 3), ")"),
+         paste0("Prediabetes (AUC = ", round(auc(roc_1_xgb), 3), ")"),
+         paste0("Diabetes (AUC = ", round(auc(roc_2_xgb), 3), ")")
+       ),
+       col = c("blue", "orange", "red"),
+       lwd = 2)
+```
+
+### Feature Importance
+
+```{r xgb-feature-importance}
+# Lấy feature importance
+importance_matrix <- xgb.importance(
+  feature_names = colnames(train_features),
+  model = xgb_model
+)
+
+cat("=== TOP 15 MOST IMPORTANT FEATURES ===\n")
+kable(importance_matrix[1:15, c("Feature", "Gain")],
+      caption = "Top 15 Features - XGBoost",
+      digits = 4)
+
+# Visualize
+xgb.plot.importance(importance_matrix[1:20, ], 
+                    main = "Top 20 Most Important Features - XGBoost",
+                    xlab = "Relative Importance (Gain)")
+```
+
+# So sánh và đánh giá mô hình
+
+## So sánh Performance Metrics
+
+```{r compare-models}
+# Thu thập metrics
+mlr_overall_acc <- conf_hybrid_mlr$overall["Accuracy"]
+mlr_sens <- conf_hybrid_mlr$byClass[, "Sensitivity"]
+mlr_prec <- conf_hybrid_mlr$byClass[, "Pos Pred Value"]
+
+lda_overall_acc <- conf_matrix_balanced$overall["Accuracy"]
+lda_sens <- conf_matrix_balanced$byClass[, "Sensitivity"]
+lda_prec <- conf_matrix_balanced$byClass[, "Pos Pred Value"]
+
+xgb_overall_acc <- xgb_conf_matrix$overall["Accuracy"]
+xgb_sens <- xgb_conf_matrix$byClass[, "Sensitivity"]
+xgb_prec <- xgb_conf_matrix$byClass[, "Pos Pred Value"]
+
+# Bảng so sánh
+comparison_table <- data.frame(
+  Metric = c("Overall Accuracy",
+             "Sensitivity - No_Diabetes",
+             "Sensitivity - Prediabetes",
+             "Sensitivity - Diabetes",
+             "Precision - No_Diabetes",
+             "Precision - Prediabetes",
+             "Precision - Diabetes",
+             "AUC - No_Diabetes",
+             "AUC - Prediabetes",
+             "AUC - Diabetes"),
+  
+  MLR_Hybrid = c(
+    round(mlr_overall_acc, 4),
+    round(mlr_sens[1], 4),
+    round(mlr_sens[2], 4),
+    round(mlr_sens[3], 4),
+    round(mlr_prec[1], 4),
+    round(mlr_prec[2], 4),
+    round(mlr_prec[3], 4),
+    round(auc(roc_0_mlr), 4),
+    round(auc(roc_1_mlr), 4),
+    round(auc(roc_2_mlr), 4)
+  ),
+  
+  LDA_Balanced = c(
+    round(lda_overall_acc, 4),
+    round(lda_sens[1], 4),
+    round(lda_sens[2], 4),
+    round(lda_sens[3], 4),
+    round(lda_prec[1], 4),
+    round(lda_prec[2], 4),
+    round(lda_prec[3], 4),
+    round(auc(roc_0), 4),
+    round(auc(roc_1), 4),
+    round(auc(roc_2), 4)
+  ),
+  
+  XGBoost = c(
+    round(xgb_overall_acc, 4),
+    round(xgb_sens[1], 4),
+    round(xgb_sens[2], 4),
+    round(xgb_sens[3], 4),
+    round(xgb_prec[1], 4),
+    round(xgb_prec[2], 4),
+    round(xgb_prec[3], 4),
+    round(auc(roc_0_xgb), 4),
+    round(auc(roc_1_xgb), 4),
+    round(auc(roc_2_xgb), 4)
+  )
+)
+
+kable(comparison_table,
+      caption = "Bảng so sánh chi tiết 3 mô hình",
+      row.names = FALSE,
+      align = c("l", "c", "c", "c"))
+```
+
+## Visualization - Sensitivity Comparison
+
+```{r viz-sensitivity-comparison}
+sensitivity_comparison_all <- data.frame(
+  Class = rep(c("No_Diabetes", "Prediabetes", "Diabetes"), each = 3),
+  Model = rep(c("MLR (Hybrid)", "LDA (Balanced)", "XGBoost"), 3),
+  Sensitivity = c(
+    mlr_sens[1], lda_sens[1], xgb_sens[1],
+    mlr_sens[2], lda_sens[2], xgb_sens[2],
+    mlr_sens[3], lda_sens[3], xgb_sens[3]
+  )
+)
+
+ggplot(sensitivity_comparison_all, aes(x = Class, y = Sensitivity, fill = Model)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.85), 
+           width = 0.75) +
+  geom_hline(yintercept = 0.5, linetype = "dashed", color = "red", size = 0.8) +
+  scale_fill_manual(values = c("MLR (Hybrid)" = "#E69F00", 
+                               "LDA (Balanced)" = "#56B4E9", 
+                               "XGBoost" = "#009E73")) +
+  labs(title = "So sánh Sensitivity giữa 3 mô hình",
+       subtitle = "Chú trọng khả năng phát hiện Prediabetes và Diabetes",
+       x = "Class", y = "Sensitivity (Recall)", fill = "Model") +
+  ylim(0, 1) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5, size = 11, color = "gray30"),
+        legend.position = "bottom")
+```
+
+## Visualization - AUC Comparison
+
+```{r viz-auc-comparison}
+auc_comparison_all <- data.frame(
+  Class = rep(c("No_Diabetes", "Prediabetes", "Diabetes"), each = 3),
+  Model = rep(c("MLR", "LDA", "XGBoost"), 3),
+  AUC = c(
+    auc(roc_0_mlr), auc(roc_0), auc(roc_0_xgb),
+    auc(roc_1_mlr), auc(roc_1), auc(roc_1_xgb),
+    auc(roc_2_mlr), auc(roc_2), auc(roc_2_xgb)
+  )
+)
+
+ggplot(auc_comparison_all, aes(x = Class, y = AUC, fill = Model)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.85), 
+           width = 0.75) +
+  geom_hline(yintercept = 0.7, linetype = "dashed", color = "darkgreen", 
+             size = 0.8) +
+  geom_hline(yintercept = 0.5, linetype = "dotted", color = "red", size = 0.8) +
+  scale_fill_manual(values = c("MLR" = "#E69F00", 
+                               "LDA" = "#56B4E9", 
+                               "XGBoost" = "#009E73")) +
+  labs(title = "So sánh AUC (Area Under ROC Curve)",
+       subtitle = "AUC ≥ 0.7: Good discrimination | AUC ≈ 0.5: Random guess",
+       x = "Class", y = "AUC", fill = "Model") +
+  ylim(0, 1) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5, size = 10, color = "gray30"),
+        legend.position = "bottom")
+```
+
+# Kết luận và khuyến nghị
+
+## Tóm tắt kết quả
+
+### Nhận xét so sánh 3 mô hình:
+
+**1. Khả năng phát hiện Diabetes:**  
+MLR (Hybrid) cho Sensitivity cao nhất, tiếp theo là XGBoost và LDA. Điều này cho thấy Logistic Regression tận dụng tốt các biến tuyến tính để nhận diện nhóm đã mắc tiểu đường.
+
+**2. Khả năng phát hiện Prediabetes:**  
+XGBoost đạt Sensitivity cao nhất trong 3 mô hình, trong khi LDA và đặc biệt MLR gặp khó khăn. Điều này phản ánh ưu thế của mô hình phi tuyến trong việc học các ranh giới phức tạp của nhóm tiền tiểu đường.
+
+**3. Lớp No_Diabetes:**  
+Cả ba mô hình đều cho Sensitivity cao, với LDA và MLR nhỉnh hơn một chút, cho thấy việc nhận diện người không mắc bệnh là tương đối dễ.
+
+**4. So sánh AUC:**  
+- Với các lớp **No_Diabetes** và **Diabetes**, cả ba mô hình đều đạt AUC > 0.8, thể hiện khả năng phân biệt tốt.
+- Riêng **Prediabetes**, AUC của cả ba mô hình thấp hơn (~0.65–0.70), cho thấy đây là lớp khó phân biệt nhất do đặc trưng chồng lấn.
+
+### Kết luận tổng hợp:
+
+- **LDA**: Ổn định, dễ diễn giải, phù hợp làm mô hình baseline.
+- **Logistic Regression (MLR)**: Mạnh trong phát hiện Diabetes, nhưng yếu với Prediabetes.
+- **XGBoost**: Cân bằng tốt nhất giữa các lớp, đặc biệt có lợi thế khi phát hiện Prediabetes.
+
+## Khuyến nghị
+
+**Trong bối cảnh y sinh và sàng lọc sớm:**
+
+1. **XGBoost** là lựa chọn phù hợp nhất do khả năng phát hiện Prediabetes tốt hơn - nhóm có ý nghĩa quan trọng trong phòng ngừa tiến triển bệnh.
+
+2. **LDA/MLR** vẫn hữu ích cho phân tích diễn giải và so sánh, giúp hiểu rõ các yếu tố nguy cơ.
+
+3. **Các yếu tố quan trọng nhất** cần theo dõi:
+   - GenHlth (Sức khỏe tổng quát)
+   - BMI (Chỉ số khối cơ thể)
+   - HighBP (Huyết áp cao)
+   - HighChol (Cholesterol cao)
+   - Age (Tuổi tác)
+
+4. **Hướng phát triển tiếp theo:**
+   - Thử nghiệm các phương pháp ensemble khác
+   - Tối ưu hóa threshold cho từng use case cụ thể
+   - Phân tích chi tiết các ca false negative/positive
+   - Kết hợp với dữ liệu lâm sàng bổ sung
+
+
